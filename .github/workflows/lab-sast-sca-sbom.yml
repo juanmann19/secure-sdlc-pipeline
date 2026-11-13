@@ -1,0 +1,90 @@
+# Laboratorio complementario al repositorio kbcasurf/secure-sdlc-pipeline.
+# No sustituye el workflow original; incorpora OWASP Dependency-Check.
+name: 'Lab - SAST SCA y SBOM'
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      enforce_gate:
+        description: 'Bloquear si Semgrep marca ERROR o Dependency-Check detecta CVSS >= 7'
+        type: boolean
+        required: true
+        default: true
+
+permissions:
+  contents: read
+
+jobs:
+  seguridad:
+    name: 'Semgrep + Dependency-Check + SBOM'
+    runs-on: ubuntu-latest
+    steps:
+      - name: 'Descargar código'
+        uses: actions/checkout@v4
+
+      - name: 'Generar lockfile para el análisis de dependencias'
+        working-directory: app
+        run: npm install --package-lock-only --ignore-scripts --no-audit
+
+      - name: 'Instalar Semgrep'
+        run: python -m pip install semgrep
+
+      - name: 'SAST - Semgrep (severidad ERROR)'
+        id: sast
+        continue-on-error: true
+        run: |
+          mkdir -p reports
+          semgrep scan \
+            --config auto \
+            --config .semgrep/lab-rules.yml \
+            --severity ERROR \
+            --error \
+            --json \
+            --output reports/semgrep.json \
+            app/
+
+      - name: 'SCA - OWASP Dependency-Check (CVSS >= 7)'
+        id: sca
+        continue-on-error: true
+        uses: dependency-check/Dependency-Check_Action@main
+        with:
+          project: 'secure-sdlc-laboratorio'
+          path: 'app'
+          format: 'ALL'
+          out: 'reports/dependency-check'
+          args: '--failOnCVSS 7'
+
+      - name: 'SBOM - Syft (CycloneDX JSON)'
+        uses: anchore/sbom-action@v0
+        with:
+          path: './app'
+          format: 'cyclonedx-json'
+          output-file: 'sbom.cyclonedx.json'
+          artifact-name: 'laboratorio-sbom-cyclonedx'
+
+      - name: 'Publicar reportes SAST y SCA'
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: 'laboratorio-reportes-sast-sca'
+          path: |
+            reports/semgrep.json
+            reports/dependency-check/
+          if-no-files-found: warn
+
+      - name: 'Quality gate - bloquear por severidad'
+        if: ${{ always() && (github.event_name != 'workflow_dispatch' || inputs.enforce_gate) }}
+        env:
+          SAST_RESULT: ${{ steps.sast.outcome }}
+          SCA_RESULT: ${{ steps.sca.outcome }}
+        run: |
+          echo "Resultado SAST (Semgrep): $SAST_RESULT"
+          echo "Resultado SCA (Dependency-Check): $SCA_RESULT"
+          if [ "$SAST_RESULT" != "success" ] || [ "$SCA_RESULT" != "success" ]; then
+            echo '::error::Quality gate falló. Hay hallazgos que superan la severidad permitida o un escáner no logró completarse.'
+            exit 1
+          fi
+          echo 'Quality gate superado: los dos escáneres cumplieron la política.'
