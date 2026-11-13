@@ -1,0 +1,14 @@
+# Reglas didácticas para reproducir hallazgos del repositorio vulnerable.
+# Son demostrativas; una política de producción requiere reglas más amplias.
+rules:
+  - id: demo-inyeccion-comandos
+    languages: [javascript]
+    severity: ERROR
+    message: 'Posible inyección de comandos: exec construye un comando con entrada variable.'
+    pattern: exec('ping -c 1 ' + $USER_INPUT, ...)
+
+  - id: demo-hash-debil-md5
+    languages: [javascript]
+    severity: ERROR
+    message: 'MD5 es inadecuado para almacenar contraseñas; usar Argon2, scrypt o bcrypt.'
+    pattern: crypto.createHash('md5')
